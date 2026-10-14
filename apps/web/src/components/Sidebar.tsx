@@ -1,4 +1,8 @@
-import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type ScopedProjectRef,
+  type VcsStatusResult,
+} from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
@@ -2243,7 +2247,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     );
   }
 
-  const diff = latestRunDiff(thread);
+  const diff = workingTreeDiff(visibleGitStatus);
 
   return (
     <li
@@ -2467,7 +2471,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {terminalStatusIcon}
               {prBadge}
               {diff ? (
-                <span className="shrink-0 font-mono">
+                <span
+                  className="shrink-0 font-mono"
+                  title={`${diff.files} changed ${diff.files === 1 ? "file" : "files"}`}
+                >
+                  <span className="text-muted-foreground/60">{diff.files}</span>{" "}
                   <span className="text-diff-addition-foreground">
                     +{formatDiffCount(diff.insertions)}
                   </span>{" "}
@@ -2504,11 +2512,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
 });
 
-function latestRunDiff(
-  thread: SidebarThreadSummary,
-): { insertions: number; deletions: number } | null {
-  void thread;
-  return null;
+// Uncommitted changes in the thread's checkout (its worktree, or the project
+// root for local threads), from the same status subscription the row already
+// leases for branch and PR resolution.
+function workingTreeDiff(
+  status: VcsStatusResult | null | undefined,
+): { files: number; insertions: number; deletions: number } | null {
+  if (!status?.isRepo || !status.hasWorkingTreeChanges) return null;
+  const { files, insertions, deletions } = status.workingTree;
+  if (files.length === 0) return null;
+  return { files: files.length, insertions, deletions };
 }
 
 const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
