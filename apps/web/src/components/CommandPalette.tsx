@@ -2281,6 +2281,62 @@ function OpenCommandPaletteDialog(props: {
     setOpen(false);
   };
 
+  // Adds every given folder as a project without opening threads, so a whole
+  // directory of checkouts (e.g. ~/Projects) can be added in one step.
+  const handleAddAllProjects = async (
+    environmentId: EnvironmentId,
+    workspaceRoots: ReadonlyArray<string>,
+  ) => {
+    const environment = environments.find(
+      (candidate) => candidate.environmentId === environmentId,
+    );
+    if (
+      !canCreateProjectInEnvironment(environment?.connection.phase) ||
+      !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+    ) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Cannot add projects",
+          description: `${environment?.label ?? "The selected environment"} cannot add projects.`,
+        }),
+      );
+      return;
+    }
+    setOpen(false);
+    const failed: string[] = [];
+    for (const workspaceRoot of workspaceRoots) {
+      const result = await createProject({
+        environmentId,
+        input: {
+          projectId: newProjectId(),
+          title: inferProjectTitleFromPath(workspaceRoot),
+          workspaceRoot,
+          createWorkspaceRootIfMissing: false,
+          defaultModelSelection: null,
+        },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        failed.push(inferProjectTitleFromPath(workspaceRoot));
+      }
+    }
+    const added = workspaceRoots.length - failed.length;
+    toastManager.add(
+      stackedThreadToast(
+        failed.length === 0
+          ? {
+              type: "success",
+              title: `Added ${added} ${added === 1 ? "project" : "projects"}`,
+            }
+          : {
+              type: "error",
+              title: `Added ${added} of ${workspaceRoots.length} projects`,
+              description: `Failed: ${failed.join(", ")}`,
+            },
+      ),
+    );
+  };
+
   const handleAddProject = async (rawCwd: string) => {
     if (!browseEnvironmentId) return;
     await handleAddProjectForEnvironment({
@@ -2577,6 +2633,44 @@ function OpenCommandPaletteDialog(props: {
     browseUp,
     browseTo,
   });
+  // Offered while viewing a directory itself (no partial name typed): one
+  // action that adds every visible, not-yet-added subfolder as a project.
+  const addAllBrowseCandidates =
+    browseEnvironmentId !== null &&
+    browseResult !== undefined &&
+    browsePath.filterQuery.length === 0 &&
+    addProjectCloneFlow === null
+      ? visibleBrowseEntries
+          .filter((entry) => !entry.name.startsWith("."))
+          .filter(
+            (entry) =>
+              !findProjectByPath(
+                projects.filter((project) => project.environmentId === browseEnvironmentId),
+                entry.fullPath,
+              ),
+          )
+          .map((entry) => entry.fullPath)
+      : [];
+  const addAllBrowseGroup: CommandPaletteView["groups"][number] | null =
+    addAllBrowseCandidates.length < 2 || browseEnvironmentId === null || !canCreateProject
+      ? null
+      : {
+          value: "add-all",
+          label: "Bulk",
+          items: [
+            {
+              kind: "action",
+              value: "browse:add-all",
+              searchTerms: [query],
+              title: `Add all ${addAllBrowseCandidates.length} folders as projects`,
+              description: browseResult?.parentPath ?? "",
+              icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+              run: async () => {
+                await handleAddAllProjects(browseEnvironmentId, addAllBrowseCandidates);
+              },
+            },
+          ],
+        };
   const cloneDestinationBrowseGroups = browseGroups.map((group) =>
     group.value === "directories" ? { ...group, label: "Select where to clone" } : group,
   );
@@ -2776,7 +2870,11 @@ function OpenCommandPaletteDialog(props: {
   } else if (addProjectCloneFlow?.step === "confirm") {
     displayedGroups = relativePathNeedsActiveProject ? [] : cloneDestinationBrowseGroups;
   } else if (isBrowsing) {
-    displayedGroups = relativePathNeedsActiveProject ? [] : browseGroups;
+    displayedGroups = relativePathNeedsActiveProject
+      ? []
+      : addAllBrowseGroup
+        ? [addAllBrowseGroup, ...browseGroups]
+        : browseGroups;
   }
   const resultRows = buildCommandPaletteRows(displayedGroups);
   const autoHighlightsFirstRow =
